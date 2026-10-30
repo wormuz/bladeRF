@@ -32,6 +32,12 @@
 #include <sys/alt_timestamp.h>
 
 #include "devices_rfic.h"
+
+extern void adi_gain_table_spi_timing_start(void);
+extern void adi_gain_table_spi_timing_stop(void);
+extern void adi_gain_table_spi_timing_fail(void);
+extern bool adi_gain_table_timing_read_us(uint32_t *spi_us,
+                                          uint32_t *service_us);
 #include "ad936x_helpers.h"
 #include "nios_pkt_8x64.h"
 #include "nios_pkt_16x64.h"
@@ -465,8 +471,11 @@ int32_t rfic_start_gain_table_for_retune(uint8_t request)
     const struct gain_table_info *old = NULL;
     int32_t status;
 
+    adi_gain_table_spi_timing_start();
+
     status = rfic_job_context_claim(&state, sizeof(*load));
     if (status < 0) {
+        adi_gain_table_spi_timing_fail();
         return status;
     }
     if (state.phy != NULL) {
@@ -475,6 +484,7 @@ int32_t rfic_start_gain_table_for_retune(uint8_t request)
         status = ad9361_gain_table_transaction_start(
             state.phy, region_end_hz[to], GT_RX1 | GT_RX2, load);
         if (status == 0 && load->terminal) {
+            adi_gain_table_spi_timing_stop();
             return 0;
         }
     } else {
@@ -482,11 +492,13 @@ int32_t rfic_start_gain_table_for_retune(uint8_t request)
             from = NIOS_PKT_RETUNE2_GT_UNKNOWN;
         }
         if (from == to) {
+            adi_gain_table_spi_timing_stop();
             return 0;
         }
         if (from != NIOS_PKT_RETUNE2_GT_UNKNOWN) {
             old = rfic_gain_table_info(split, from);
             if (old == NULL) {
+                adi_gain_table_spi_timing_fail();
                 return -EINVAL;
             }
         }
@@ -495,6 +507,7 @@ int32_t rfic_start_gain_table_for_retune(uint8_t request)
             (request & NIOS_PKT_RETUNE2_GT_ELNA) != 0, GT_RX1 | GT_RX2, load);
     }
     if (status < 0) {
+        adi_gain_table_spi_timing_fail();
         return status;
     }
     /* After the rows write the host's gain for this region, as
@@ -527,9 +540,19 @@ int32_t rfic_poll_gain_table_for_retune(void)
     if (status == 1) {
         return 1;
     }
+    if (status < 0) {
+        adi_gain_table_spi_timing_fail();
+    } else {
+        adi_gain_table_spi_timing_stop();
+    }
     state.gain_table_retune_owner = false;
     state.gain_table_doubt = status != 0;
     return status;
+}
+
+bool rfic_gain_table_timing_us(uint32_t *spi_us, uint32_t *service_us)
+{
+    return adi_gain_table_timing_read_us(spi_us, service_us);
 }
 
 bool rfic_gain_table_retune_owner(void)

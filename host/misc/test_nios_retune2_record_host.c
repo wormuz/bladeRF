@@ -87,11 +87,12 @@ static bool serve(uint16_t addr, uint64_t sequence, uint64_t *data)
                 NIOS_PKT_16x64_RETUNE2_TIMING_OTHER_VALID;
     } else if (word ==
                NIOS_PKT_16x64_RETUNE2_RECORD_WORD_GAIN_DETAIL) {
-        *data = UINT64_C(1234) |
-                NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_ACTIVE_VALID |
-                (UINT64_C(5678) <<
-                 NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_GAP_SHIFT) |
-                NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_GAP_VALID;
+        *data = UINT64_C(64) |
+                NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_GAP_VALID |
+                (UINT64_C(901) << NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_SPI_SHIFT) |
+                NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_SPI_VALID |
+                (UINT64_C(123) << NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_SERVICE_SHIFT) |
+                NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_SERVICE_VALID;
     } else {
         uint32_t elapsed = 1234567u;
         *data = (uint64_t)elapsed |
@@ -215,8 +216,10 @@ int main(void)
                   timing.gain_table_ticks == 4 * 64 &&
                   timing.pll_ticks == 5 * 64 &&
                   timing.other_ticks == 6 * 64 &&
-                  timing.gain_loader_active_ticks == 1234 &&
-                  timing.gain_loader_gap_ticks == 5678 &&
+                  timing.gain_loader_active_ticks == 192 &&
+                  timing.gain_loader_gap_ticks == 64 &&
+                  timing.gain_loader_spi_command_us == 901 &&
+                  timing.gain_loader_service_us == 123 &&
                   transactions == 2,
               "NOW device stage timing: status %d mask 0x%x tx %u",
               status, timing.valid_mask, transactions);

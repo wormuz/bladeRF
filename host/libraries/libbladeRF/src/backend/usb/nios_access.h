@@ -389,6 +389,9 @@ struct nios_retune2_device_timing {
     uint32_t other_ticks;
     uint32_t gain_loader_active_ticks;
     uint32_t gain_loader_gap_ticks;
+    /* SPI command time is microseconds; other durations are RX tamer ticks. */
+    uint32_t gain_loader_spi_command_us;
+    uint32_t gain_loader_service_us;
     uint8_t valid_mask;
 };
 

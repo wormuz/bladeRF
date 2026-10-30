@@ -49,9 +49,95 @@ static struct command_uart_fault_state command_uart_fault;
 extern uint64_t bladerf_platform_monotonic_ticks(void);
 extern void bladerf_platform_service(void);
 
+static bool gain_table_spi_timing_active;
+static bool gain_table_spi_timing_valid;
+static uint32_t gain_table_spi_timing_ticks;
+static uint32_t gain_table_service_timing_ticks;
+static bool gain_table_service_timing_valid;
+static bool gain_table_service_timing_inside;
+
+void adi_gain_table_spi_timing_start(void)
+{
+    gain_table_spi_timing_ticks = 0;
+    gain_table_spi_timing_valid = true;
+    gain_table_service_timing_ticks = 0;
+    gain_table_service_timing_valid = true;
+    gain_table_service_timing_inside = false;
+    gain_table_spi_timing_active = true;
+}
+
+void adi_gain_table_spi_timing_stop(void)
+{
+    gain_table_spi_timing_active = false;
+}
+
+void adi_gain_table_spi_timing_fail(void)
+{
+    gain_table_spi_timing_active = false;
+    gain_table_spi_timing_valid = false;
+    gain_table_service_timing_valid = false;
+}
+
+bool adi_gain_table_timing_read_us(uint32_t *spi_us, uint32_t *service_us)
+{
+    const uint64_t ticks_per_us = ALT_CPU_FREQ / 1000000ULL;
+
+    if (spi_us == NULL || service_us == NULL || ticks_per_us == 0 ||
+        !gain_table_spi_timing_valid ||
+        !gain_table_service_timing_valid ||
+        gain_table_spi_timing_active) {
+        return false;
+    }
+    *spi_us = (uint32_t)(gain_table_spi_timing_ticks / ticks_per_us);
+    *service_us = (uint32_t)(gain_table_service_timing_ticks / ticks_per_us);
+    return true;
+}
+
+static void adi_gain_table_spi_timing_record(uint64_t start,
+                                             uint64_t end)
+{
+    const uint64_t elapsed = end - start;
+
+    if (!gain_table_spi_timing_active) {
+        return;
+    }
+    if (end < start || elapsed > UINT32_MAX ||
+        UINT32_MAX - gain_table_spi_timing_ticks < elapsed) {
+        gain_table_spi_timing_valid = false;
+        return;
+    }
+    gain_table_spi_timing_ticks += (uint32_t)elapsed;
+}
+
+static void adi_gain_table_service_timing_record(uint64_t start,
+                                                 uint64_t end)
+{
+    const uint64_t elapsed = end - start;
+
+    if (end < start || elapsed > UINT32_MAX ||
+        UINT32_MAX - gain_table_service_timing_ticks < elapsed) {
+        gain_table_service_timing_valid = false;
+        return;
+    }
+    gain_table_service_timing_ticks += (uint32_t)elapsed;
+}
+
 static void rfic_service_safe_point(void)
 {
+    const bool measure = gain_table_spi_timing_active &&
+                         !gain_table_service_timing_inside;
+    uint64_t start = 0;
+
+    if (measure) {
+        gain_table_service_timing_inside = true;
+        start = bladerf_platform_monotonic_ticks();
+    }
     bladerf_platform_service();
+    if (measure) {
+        adi_gain_table_service_timing_record(
+            start, bladerf_platform_monotonic_ticks());
+        gain_table_service_timing_inside = false;
+    }
 }
 
 #endif
@@ -1102,6 +1188,8 @@ static int bladerf_spi_command_bounded(alt_u32 base, alt_u32 slave,
      * cooperative status hook a safe point after the SPI transaction has
      * drained. The hook is restricted to status reads / duplicate ACKs and
      * must never re-enter the RFIC SPI path. */
+    adi_gain_table_spi_timing_record(start_time,
+                                     bladerf_platform_monotonic_ticks());
     rfic_service_safe_point();
 #endif
     return (int)read_length;

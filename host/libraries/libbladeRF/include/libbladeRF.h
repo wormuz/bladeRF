@@ -5654,6 +5654,10 @@ struct bladerf_rx_transition_nios_timing {
     uint32_t other_ticks;
     uint32_t gain_loader_active_ticks;
     uint32_t gain_loader_gap_ticks;
+    /** Bounded SPI command elapsed time in microseconds (sys_clock domain). */
+    uint32_t gain_loader_spi_command_us;
+    /** Cooperative NIOS service-hook time in microseconds (sys_clock). */
+    uint32_t gain_loader_service_us;
 };
 
 /** Request parameters for ::bladerf_rx_transition_begin. */

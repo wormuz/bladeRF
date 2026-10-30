@@ -239,6 +239,8 @@ struct bladerf {
         uint32_t device_other_ticks;
         uint32_t device_gain_loader_active_ticks;
         uint32_t device_gain_loader_gap_ticks;
+        uint32_t device_gain_loader_spi_command_us;
+        uint32_t device_gain_loader_service_us;
         uint8_t device_timing_valid_mask;
         uint8_t device_failure_stage;
         int status;

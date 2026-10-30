@@ -2478,12 +2478,22 @@ int nios_retune2_completion_device_timing_read(
     if (status != 0) {
         return status;
     }
-    if ((gain_detail & NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_ACTIVE_VALID) != 0 &&
-        (gain_detail & NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_GAP_VALID) != 0) {
-        timing->gain_loader_active_ticks = (uint32_t)(
-            gain_detail & NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_VALUE_MASK);
+    if ((gain_detail & NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_GAP_VALID) != 0 &&
+        (gain_detail & NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_SPI_VALID) != 0 &&
+        (gain_detail & NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_SERVICE_VALID) != 0) {
         timing->gain_loader_gap_ticks = (uint32_t)(
             (gain_detail >> NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_GAP_SHIFT) &
+            NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_VALUE_MASK);
+        if (timing->gain_loader_gap_ticks > timing->gain_table_ticks) {
+            return BLADERF_ERR_UNEXPECTED;
+        }
+        timing->gain_loader_active_ticks = timing->gain_table_ticks -
+                                           timing->gain_loader_gap_ticks;
+        timing->gain_loader_spi_command_us = (uint32_t)(
+            (gain_detail >> NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_SPI_SHIFT) &
+            NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_VALUE_MASK);
+        timing->gain_loader_service_us = (uint32_t)(
+            (gain_detail >> NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_SERVICE_SHIFT) &
             NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_VALUE_MASK);
         timing->valid_mask |= NIOS_RETUNE2_TIMING_GAIN_DETAIL_VALID;
     }
@@ -3014,6 +3024,10 @@ static int nios_retune2_wait_now_terminal(
                         device_timing.gain_loader_active_ticks;
                     dev->nios_retune_trace.device_gain_loader_gap_ticks =
                         device_timing.gain_loader_gap_ticks;
+                    dev->nios_retune_trace.device_gain_loader_spi_command_us =
+                        device_timing.gain_loader_spi_command_us;
+                    dev->nios_retune_trace.device_gain_loader_service_us =
+                        device_timing.gain_loader_service_us;
                     dev->nios_retune_trace.device_timing_valid_mask =
                         device_timing.valid_mask;
                     if ((device_timing.valid_mask & 0x0fu) == 0x0fu) {

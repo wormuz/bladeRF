@@ -4297,6 +4297,10 @@ static int _bladerf_rx_transition_begin(
                     dev->nios_retune_trace.device_gain_loader_active_ticks;
                 board_data->rf_transition_nios_timing[timing_slot].gain_loader_gap_ticks =
                     dev->nios_retune_trace.device_gain_loader_gap_ticks;
+                board_data->rf_transition_nios_timing[timing_slot].gain_loader_spi_command_us =
+                    dev->nios_retune_trace.device_gain_loader_spi_command_us;
+                board_data->rf_transition_nios_timing[timing_slot].gain_loader_service_us =
+                    dev->nios_retune_trace.device_gain_loader_service_us;
                 board_data->rf_transition_nios_timing[timing_slot].timing_valid_mask =
                     dev->nios_retune_trace.device_timing_valid_mask;
                 board_data->rf_transition_nios_timing[timing_slot].nios_retune_observed = true;
@@ -5717,6 +5721,10 @@ int bladerf_rx_transition_get_nios_timing(
                 board_data->rf_transition_nios_timing[slot].gain_loader_active_ticks;
             timing->gain_loader_gap_ticks =
                 board_data->rf_transition_nios_timing[slot].gain_loader_gap_ticks;
+            timing->gain_loader_spi_command_us =
+                board_data->rf_transition_nios_timing[slot].gain_loader_spi_command_us;
+            timing->gain_loader_service_us =
+                board_data->rf_transition_nios_timing[slot].gain_loader_service_us;
             timing->timing_valid_mask =
                 board_data->rf_transition_nios_timing[slot].timing_valid_mask;
         }

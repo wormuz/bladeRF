@@ -182,6 +182,13 @@ bool rfic_gain_table_retune_owner(void)
     return simulated_gt_owner;
 }
 
+bool rfic_gain_table_timing_us(uint32_t *spi_us, uint32_t *service_us)
+{
+    (void)spi_us;
+    (void)service_us;
+    return false;
+}
+
 void rfic_doubt_gain_table(void)
 {
     simulated_gt_doubt = true;
