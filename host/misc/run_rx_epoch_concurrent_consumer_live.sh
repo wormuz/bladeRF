@@ -9,6 +9,12 @@ trap 'rm -f "$binary"' EXIT
 
 cc -D_DEFAULT_SOURCE -std=c11 -Wall -Wextra -Werror -O2 -pthread \
   -I"$repo_root/host/libraries/libbladeRF/include" \
+  -I"$repo_root/host/libraries/libbladeRF/src" \
+  -I"$repo_root/host/libraries/libbladeRF/src/backend/usb" \
+  -I"$build_dir/common/include" \
+  -I"$repo_root/host/common/include" \
+  -I"$repo_root/firmware_common" \
+  -I"$repo_root/fpga_common/include" \
   "$script_dir/rx_epoch_concurrent_consumer_live.c" \
   -L"$build_dir/output" -Wl,-rpath,"$build_dir/output" \
   -lbladeRF -o "$binary"

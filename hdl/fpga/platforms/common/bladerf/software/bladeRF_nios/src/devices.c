@@ -53,15 +53,15 @@ extern void bladerf_platform_service_defer(bool defer);
 static bool gain_table_spi_timing_active;
 static bool gain_table_spi_timing_valid;
 static uint32_t gain_table_spi_timing_ticks;
-static uint32_t gain_table_row_timing_ticks;
-static bool gain_table_row_timing_valid;
+static uint32_t gain_table_arbiter_timing_ticks;
+static bool gain_table_arbiter_timing_valid;
 
 void adi_gain_table_spi_timing_start(void)
 {
     gain_table_spi_timing_ticks = 0;
     gain_table_spi_timing_valid = true;
-    gain_table_row_timing_ticks = 0;
-    gain_table_row_timing_valid = true;
+    gain_table_arbiter_timing_ticks = 0;
+    gain_table_arbiter_timing_valid = true;
     gain_table_spi_timing_active = true;
 }
 
@@ -74,22 +74,22 @@ void adi_gain_table_spi_timing_fail(void)
 {
     gain_table_spi_timing_active = false;
     gain_table_spi_timing_valid = false;
-    gain_table_row_timing_valid = false;
+    gain_table_arbiter_timing_valid = false;
 }
 
-bool adi_gain_table_timing_read_us(uint32_t *spi_us, uint32_t *row_callback_us)
+bool adi_gain_table_timing_read_us(uint32_t *spi_us, uint32_t *arbiter_us)
 {
     const uint64_t ticks_per_us = ALT_CPU_FREQ / 1000000ULL;
 
-    if (spi_us == NULL || row_callback_us == NULL || ticks_per_us == 0 ||
+    if (spi_us == NULL || arbiter_us == NULL || ticks_per_us == 0 ||
         !gain_table_spi_timing_valid ||
-        !gain_table_row_timing_valid ||
+        !gain_table_arbiter_timing_valid ||
         gain_table_spi_timing_active) {
         return false;
     }
     *spi_us = (uint32_t)(gain_table_spi_timing_ticks / ticks_per_us);
-    *row_callback_us =
-        (uint32_t)(gain_table_row_timing_ticks / ticks_per_us);
+    *arbiter_us =
+        (uint32_t)(gain_table_arbiter_timing_ticks / ticks_per_us);
     return true;
 }
 
@@ -109,16 +109,16 @@ static void adi_gain_table_spi_timing_record(uint64_t start,
     gain_table_spi_timing_ticks += (uint32_t)elapsed;
 }
 
-static void adi_gain_table_row_timing_record(uint64_t start, uint64_t end)
+static void adi_gain_table_arbiter_timing_record(uint64_t start, uint64_t end)
 {
     const uint64_t elapsed = end - start;
 
     if (end < start || elapsed > UINT32_MAX ||
-        UINT32_MAX - gain_table_row_timing_ticks < elapsed) {
-        gain_table_row_timing_valid = false;
+        UINT32_MAX - gain_table_arbiter_timing_ticks < elapsed) {
+        gain_table_arbiter_timing_valid = false;
         return;
     }
-    gain_table_row_timing_ticks += (uint32_t)elapsed;
+    gain_table_arbiter_timing_ticks += (uint32_t)elapsed;
 }
 
 static void rfic_service_safe_point(void)
@@ -997,6 +997,10 @@ bool spi_arbiter_lock()
             BLADERF_SPI_ARBITER_WAIT_ATTEMPTS, NULL,
             spi_arbiter_set_request, spi_arbiter_read_grant,
             bladerf_spi_arbiter_deadline_expired, &start)) {
+        if (gain_table_spi_timing_active) {
+            adi_gain_table_arbiter_timing_record(
+                start, bladerf_platform_monotonic_ticks());
+        }
         return true;
     }
 #else
@@ -1040,6 +1044,12 @@ bool spi_arbiter_unlock()
 #endif
         return false;
     }
+#ifdef BOARD_BLADERF_MICRO
+    if (gain_table_spi_timing_active) {
+        adi_gain_table_arbiter_timing_record(
+            start, bladerf_platform_monotonic_ticks());
+    }
+#endif
 #endif  // ARBITER_0_BASE
     return true;
 }
@@ -1361,8 +1371,6 @@ bool adi_spi_gain_table_row(uint16_t row, uint8_t data1, uint8_t data2,
                             uint32_t delay_us)
 {
     bool success = false;
-    const bool measure = gain_table_spi_timing_active;
-    const uint64_t start = measure ? bladerf_platform_monotonic_ticks() : 0;
     bool unlocked;
 
     if (row >= 128 || delay_us != 2 || !spi_arbiter_lock()) {
@@ -1401,10 +1409,6 @@ done:
     unlocked = spi_arbiter_unlock();
     bladerf_platform_service_defer(false);
     bladerf_platform_service();
-    if (measure) {
-        adi_gain_table_row_timing_record(
-            start, bladerf_platform_monotonic_ticks());
-    }
     return unlocked && success;
 }
 #endif  // BOARD_BLADERF_MICRO

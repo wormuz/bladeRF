@@ -5656,8 +5656,8 @@ struct bladerf_rx_transition_nios_timing {
     uint32_t gain_loader_gap_ticks;
     /** Bounded SPI command elapsed time in microseconds (sys_clock domain). */
     uint32_t gain_loader_spi_command_us;
-    /** AD9361 per-row callback elapsed time in microseconds (sys_clock). */
-    uint32_t gain_loader_row_callback_us;
+    /** Shared SPI arbiter acquire/release elapsed time in microseconds. */
+    uint32_t gain_loader_arbiter_us;
 };
 
 /** Request parameters for ::bladerf_rx_transition_begin. */

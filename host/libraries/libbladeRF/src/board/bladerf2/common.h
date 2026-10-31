@@ -451,7 +451,7 @@ struct bladerf2_board_data {
         uint32_t gain_loader_active_ticks;
         uint32_t gain_loader_gap_ticks;
         uint32_t gain_loader_spi_command_us;
-        uint32_t gain_loader_row_callback_us;
+        uint32_t gain_loader_arbiter_us;
         uint8_t timing_valid_mask;
         bool nios_retune_observed;
         bool duration_valid;

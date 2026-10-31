@@ -1,4 +1,5 @@
 #include <libbladeRF.h>
+#include "rfic_timing_access.h"
 #include "timestamp_order.h"
 #include <pthread.h>
 #include <sched.h>
@@ -234,10 +235,22 @@ int main(int argc, char **argv)
     struct bladerf_rf_event events[BLADERF_RF_EVENT_HISTORY_SIZE];
     uint32_t count = 0;
     bool complete = false;
+    bool opwin_active = false;
+    int opwin_start_status = BLADERF_ERR_UNEXPECTED;
+    int opwin_stop_status = BLADERF_ERR_UNEXPECTED;
+    int opwin_read_status = BLADERF_ERR_UNEXPECTED;
+    uint64_t opwin_worker = 0, opwin_gap = 0, opwin_hook_gap = 0;
+    uint64_t opwin_hook = 0, opwin_passes = 0, opwin_hz = 0;
     status = bladerf_rf_events_get_since(
         dev, 0, events, BLADERF_RF_EVENT_HISTORY_SIZE,
         &count, &event_cursor, &complete);
     if (status != 0) goto done;
+
+    opwin_start_status = write_metric(
+        dev, NIOS_PKT_8x64_OPWIN_CONTROL, 1);
+    if (opwin_start_status == 0) {
+        opwin_active = true;
+    }
 
     for (unsigned i = 0; i < transitions; ++i) {
         const struct bladerf_rx_transition_request request = {
@@ -309,6 +322,31 @@ done:
     pthread_cond_broadcast(&reader.event_changed);
     pthread_mutex_unlock(&reader.event_mutex);
     pthread_join(thread, NULL);
+    if (opwin_active) {
+        opwin_stop_status = write_metric(
+            dev, NIOS_PKT_8x64_OPWIN_CONTROL, 0);
+        if (opwin_stop_status == 0) {
+            opwin_read_status = read_metric(
+                dev, NIOS_PKT_8x64_OPWIN_MAX_WORKER_TICKS, &opwin_worker);
+            if (opwin_read_status == 0)
+                opwin_read_status = read_metric(
+                    dev, NIOS_PKT_8x64_OPWIN_MAX_SERVICE_GAP_TICKS,
+                    &opwin_gap);
+            if (opwin_read_status == 0)
+                opwin_read_status = read_metric(
+                    dev, NIOS_PKT_8x64_OPWIN_MAX_HOOK_GAP_TICKS,
+                    &opwin_hook_gap);
+            if (opwin_read_status == 0)
+                opwin_read_status = read_metric(
+                    dev, NIOS_PKT_8x64_OPWIN_MAX_HOOK_TICKS, &opwin_hook);
+            if (opwin_read_status == 0)
+                opwin_read_status = read_metric(
+                    dev, NIOS_PKT_8x64_OPWIN_PASSES, &opwin_passes);
+            if (opwin_read_status == 0)
+                opwin_read_status = read_metric(
+                    dev, NIOS_PKT_8x64_RFIC_TIMING_COUNTER_HZ, &opwin_hz);
+        }
+    }
     printf("RX_X2 concurrent transitions=%u/%u sample_rate=%u buffer_samples=%u dwell_ms=%u blocks=%u would_block=%u "
            "invalid_blocks=%u sync_overruns=%u "
            "event_overruns=%u bad_timestamps=%u\n",
@@ -317,6 +355,24 @@ done:
            atomic_load(&reader.would_block),
            atomic_load(&reader.invalid_blocks), atomic_load(&reader.overruns),
            event_overruns, atomic_load(&reader.bad_timestamps));
+    if (opwin_active && opwin_stop_status == 0 && opwin_read_status == 0 &&
+        opwin_hz != 0) {
+        const double tick_ms = 1000.0 / (double)opwin_hz;
+        printf("OPWIN max_worker_ms=%.3f "
+               "max_service_gap_ms=%.3f max_status_hook_interval_ms=%.3f "
+               "max_hook_ms=%.3f passes=%llu hz=%llu\n",
+               (double)opwin_worker * tick_ms,
+               (double)opwin_gap * tick_ms,
+               (double)opwin_hook_gap * tick_ms,
+               (double)opwin_hook * tick_ms,
+               (unsigned long long)opwin_passes,
+               (unsigned long long)opwin_hz);
+    } else {
+        fprintf(stderr, "OPWIN unavailable start=%s stop=%s read=%s\n",
+                bladerf_strerror(opwin_start_status),
+                bladerf_strerror(opwin_stop_status),
+                bladerf_strerror(opwin_read_status));
+    }
     bladerf_enable_module(dev, BLADERF_CHANNEL_RX(0), false);
     bladerf_enable_module(dev, BLADERF_CHANNEL_RX(1), false);
     bladerf_close(dev);
