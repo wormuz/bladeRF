@@ -878,6 +878,65 @@ int bladerf2_rx_sweep_completions(struct bladerf *dev, bladerf_channel ch,
  * recalled, and its words (read from the chip: NIOS uploads slots the
  * driver cache never saw) must decode to the record's LO; a request
  * cancelled at the end may have run without a record. Otherwise unknown. */
+/* A session that ended with the loaded table unknown leaves the driver with
+ * NO_GAIN_TABLE, so every ad9361_set_rx_gain fails with -EIO. Load the table
+ * of the last known LO's region back (quick-tune does not). */
+static void sweep_restore_gain_table(struct bladerf2_board_data *board_data)
+{
+    struct ad9361_rf_phy *phy = board_data->phy;
+    int32_t status;
+
+    if (phy == NULL || phy->spi == NULL || phy->current_table != NO_GAIN_TABLE) {
+        return;
+    }
+    if (!board_data->rx_sweep.lo_known ||
+        board_data->rx_sweep.lo_frequency == 0) {
+        log_warning("%s: RX gain table unknown and RX LO unknown, "
+                    "table not restored\n", __FUNCTION__);
+        return;
+    }
+    status = ad9361_load_gain_table(phy, board_data->rx_sweep.lo_frequency,
+                                    GT_RX1 | GT_RX2);
+    if (status != 0) {
+        log_warning("%s: RX gain table load for %llu Hz failed: %d\n",
+                    __FUNCTION__,
+                    (unsigned long long)board_data->rx_sweep.lo_frequency,
+                    (int)status);
+    }
+}
+
+/* No record of the session certifies the LO (the last record is not a
+ * success, e.g. a request whose compare fired just before the queue clear),
+ * but the synthesizer sits in the fastlock slot the chip reports as selected.
+ * Decode the LO from that slot's words and adopt it as the known LO. */
+static void sweep_adopt_chip_lo(struct bladerf2_board_data *board_data,
+                                int32_t setup)
+{
+    struct ad9361_rf_phy *phy = board_data->phy;
+    unsigned int slot;
+    uint64_t freq_hz = 0;
+    int32_t status;
+
+    board_data->rx_sweep.lo_known = false;
+    if (setup < 0 || !(setup & RX_FAST_LOCK_MODE_ENABLE)) {
+        ad9361_fastlock_invalidate_current_lo(phy, false);
+        return;
+    }
+    slot = ((uint32_t)setup >> 5) & 0x7u;
+    phy->fastlock.entry[0][slot].flags = 0;
+    status = ad9361_fastlock_sync_current_lo(phy, false, slot, 0, &freq_hz);
+    if (status != 0) {
+        log_warning("%s: chip slot %u does not decode (%d): RX LO unknown\n",
+                    __FUNCTION__, slot, status);
+        return;
+    }
+    log_warning("%s: last record not a success; adopted chip slot %u LO "
+                "%" PRIu64 " Hz\n", __FUNCTION__, slot, freq_hz);
+    board_data->rx_sweep.lo_known = slot < NUM_RFFE_FASTLOCK_PROFILES;
+    board_data->rx_sweep.lo_rffe_profile = (uint8_t)slot;
+    board_data->rx_sweep.lo_frequency = (bladerf_frequency)freq_hz;
+}
+
 static void sweep_sync_host_lo(struct bladerf2_board_data *board_data)
 {
     struct ad9361_rf_phy *phy = board_data->phy;
@@ -892,7 +951,9 @@ static void sweep_sync_host_lo(struct bladerf2_board_data *board_data)
     if (!board_data->rx_sweep.lo_known) {
         log_debug("%s: last RX sweep record leaves the LO unknown\n",
                   __FUNCTION__);
-        ad9361_fastlock_invalidate_current_lo(phy, false);
+        sweep_adopt_chip_lo(board_data,
+                            ad9361_spi_read(phy->spi,
+                                            REG_RX_FAST_LOCK_SETUP));
         return;
     }
     setup = ad9361_spi_read(phy->spi, REG_RX_FAST_LOCK_SETUP);
@@ -901,7 +962,7 @@ static void sweep_sync_host_lo(struct bladerf2_board_data *board_data)
         log_warning("%s: chip fastlock setup %d, last executed record "
                     "slot %u: RX LO unknown\n", __FUNCTION__, setup,
                     profile);
-        ad9361_fastlock_invalidate_current_lo(phy, false);
+        sweep_adopt_chip_lo(board_data, setup);
         return;
     }
     phy->fastlock.entry[0][profile].flags = 0;
@@ -931,6 +992,7 @@ static void sweep_sync_host_lo(struct bladerf2_board_data *board_data)
         log_warning("%s: RX LO slot %u does not read back as %" PRIu64
                     " Hz (%d): RX LO unknown\n", __FUNCTION__, profile,
                     (uint64_t)board_data->rx_sweep.lo_frequency, status);
+        sweep_adopt_chip_lo(board_data, setup);
     }
 }
 
@@ -1016,6 +1078,9 @@ int bladerf2_rx_sweep_end(struct bladerf *dev, bladerf_channel ch)
                                       board_data->rx_sweep.gain_table_known);
     }
     sweep_sync_host_lo(board_data);
+    if (have_cap(board_data->capabilities, BLADERF_CAP_RETUNE2_GAIN_TABLE)) {
+        sweep_restore_gain_table(board_data);
+    }
 
     /* The caller (bladerf_rx_sweep_end) then revokes the epoch: its LO is
      * no longer the one the transition certified. */

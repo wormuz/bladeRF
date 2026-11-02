@@ -1601,7 +1601,15 @@ static int _rfic_host_set_gain_stage(struct bladerf *dev,
         }
     } else {
         if (strcmp(stage, "full") == 0) {
-            CHECK_AD936X(ad9361_set_rx_rf_gain(phy, rfic_ch, val));
+            int gain_status = ad9361_set_rx_rf_gain(phy, rfic_ch, val);
+            if (gain_status == -EIO) {
+                log_warning("%s: ad9361_set_rx_gain EIO branch '%c' "
+                            "(a=calibration state unknown, b=no gain table, "
+                            "c=AGC_CONFIG_1 read), current_table=%u\n",
+                            __FUNCTION__, ad9361_get_rx_gain_eio_branch(),
+                            (unsigned int)phy->current_table);
+            }
+            CHECK_AD936X(gain_status);
         } else {
             log_warning("%s: gain stage '%s' invalid\n", __FUNCTION__, stage);
             return BLADERF_ERR_INVAL;
