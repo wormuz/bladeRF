@@ -366,6 +366,11 @@ bool adi_rfpll_lock_read(bladerf_module m, bool *locked);
 void adi_rfpll_synth_read(bladerf_module m, uint8_t rffe_profile,
                           uint8_t *synth);
 
+/* Read Fast Lock Setup (RX 0x25A, TX 0x29A): `*slot` is the RFFE profile the
+ * synthesizer runs from while fastlock mode is enabled, 0xFF otherwise.
+ * Returns false if the SPI read failed. */
+bool adi_fastlock_selected_read(bladerf_module m, uint8_t *slot);
+
 /**
  * Set the AD9361 port.
  *

@@ -866,6 +866,33 @@ static bool profile_slot_armed(const struct queue *q, uint8_t profile_num)
     return false;
 }
 
+/* True when uploading `p` would rewrite the RAM of the slot the synthesizer
+ * runs from, i.e. retune the dwell in progress before the entry's timestamp.
+ * `rffe_selected` is a superset: an ordinary LO setter (here or from the host
+ * in HOST tuning mode) leaves fastlock mode without clearing it, so a match is
+ * confirmed against Fast Lock Setup before refusing, and dropped if the chip
+ * no longer runs from that slot. A failed read refuses. */
+static bool profile_upload_hits_selected(bladerf_module module,
+                                         const fastlock_profile *p)
+{
+    uint8_t *selected = &rffe_selected[module == BLADERF_MODULE_TX ? 1 : 0];
+    uint8_t chip_slot;
+
+    if (p == NULL || *selected != p->profile_num ||
+        p->state == FASTLOCK_STATE_RFFE ||
+        p->state == FASTLOCK_STATE_BBP_RFFE) {
+        return false;
+    }
+    if (!adi_fastlock_selected_read(module, &chip_slot)) {
+        return true;
+    }
+    if (chip_slot != p->profile_num) {
+        *selected = chip_slot;
+        return false;
+    }
+    return true;
+}
+
 /* The retune interrupt may fire while this call is occuring, so we should
  * perform these operations in an order that minimizes the race window, and
  * does not cause the race to be problematic. It's fine if the last retune
@@ -1214,6 +1241,10 @@ static inline bool profile_activate(bladerf_module module, fastlock_profile *p,
      * Tokened NOW enters this worker after its acceptance ACK; tokenless NOW
      * retains its legacy synchronous response, but is also completed by this
      * worker before that response is published. */
+    /* The setup write below switches the synthesizer to this slot at once,
+     * before its lock is observed, and stays in effect if that observation
+     * fails. Reserve the slot before the write, not after the lock. */
+    rffe_selected[module == BLADERF_MODULE_TX ? 1 : 0] = p->profile_num;
 #ifdef BLADERF_NIOS_LIBAD936X
     /* The retained AD936x worker is mandatory in this build. Never let a
      * call-site flag route an xA4 NIOS recall through the blocking helper. */
@@ -1238,8 +1269,6 @@ static inline bool profile_activate(bladerf_module module, fastlock_profile *p,
         return false;
     }
 #endif
-
-    rffe_selected[module == BLADERF_MODULE_TX ? 1 : 0] = p->profile_num;
 
     /* Adjust the RFFE port */
     if (!adi_rfport_select(p)) {
@@ -1561,6 +1590,8 @@ void pkt_retune2_init()
     adi_fastlock_jobs_init();
 #endif
     profile_preload_tx_first = false;
+    rffe_selected[0] = 0xFF;
+    rffe_selected[1] = 0xFF;
     rx_retune2_failure_count = 0;
     tx_retune2_failure_count = 0;
     rx_retune2_success_count = 0;
@@ -1652,6 +1683,13 @@ static inline void perform_work(struct queue *q, bladerf_module module)
              * packet callback only accepts/copies requests; it never owns a
              * multi-write AD9361 profile transaction. Immediate tokenless
              * NOW remains on its separate compatibility path. */
+            if (!e->immediate &&
+                profile_upload_hits_selected(module, &e->profile)) {
+                record_retune2_entry_failure(
+                    module, e, NIOS_PKT_RETUNE2_FAILURE_PROFILE_SLOT_BUSY);
+                dequeue_retune(q, NULL);
+                break;
+            }
             {
                 int32_t load_start = adi_fastlock_load_start(
                     module, &e->profile);

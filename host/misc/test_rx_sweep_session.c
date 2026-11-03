@@ -183,6 +183,16 @@ int32_t ad9361_fastlock_load(struct ad9361_rf_phy *phy, bool tx,
     return 0;
 }
 
+/* rx_sweep_end restores the gain table of the final LO; not modelled. */
+int32_t ad9361_load_gain_table(struct ad9361_rf_phy *phy, uint64_t freq,
+                               uint32_t dest)
+{
+    (void)phy;
+    (void)freq;
+    (void)dest;
+    return 0;
+}
+
 int32_t ad9361_fastlock_sync_current_lo(struct ad9361_rf_phy *phy, bool tx,
                                         uint32_t profile,
                                         uint64_t expected_freq_hz,
@@ -894,8 +904,9 @@ static void check_rx2_only_session(void)
 
 /* Session end hands the AD9361 driver the LO of the last executed NIOS
  * record (slot 3 at 300 MHz here), checked against the chip; without it a
- * later sample-rate change hits profile 0xff (-EINVAL). Unknown when the
- * last record failed or the chip has another slot recalled. */
+ * later sample-rate change hits profile 0xff (-EINVAL). When the last record
+ * failed or the chip has another slot recalled, the LO decoded from the
+ * chip's selected slot is adopted. */
 static void end_session(bool last_fails, uint8_t chip_slot, bool stale)
 {
     static uint8_t spi_dummy;
@@ -944,11 +955,17 @@ static void check_end_syncs_host_lo(void)
           (unsigned long long)lo_synced_expected,
           mock_phy.fastlock.current_profile[0], lo_invalidated);
     end_session(true, 3, false);
-    CHECK(lo_invalidated == 1 && lo_synced_profile == 0xff,
-          "failed last record left a known LO");
+    CHECK(lo_invalidated == 0 && lo_synced_profile == 3 &&
+              lo_synced_expected == 0 &&
+              board_data.rx_sweep.lo_rffe_profile == 3,
+          "failed last record did not adopt the chip slot LO (slot %u)",
+          lo_synced_profile);
     end_session(false, 2, false);
-    CHECK(lo_invalidated == 1 && lo_synced_profile == 0xff,
-          "chip slot 2 against record slot 3 left a known LO");
+    CHECK(lo_invalidated == 0 && lo_synced_profile == 2 &&
+              lo_synced_expected == 0 &&
+              board_data.rx_sweep.lo_rffe_profile == 2,
+          "chip slot 2 against record slot 3 did not adopt slot 2 (slot %u)",
+          lo_synced_profile);
     /* NIOS staged a later profile into the recalled slot: the words of the
      * last executed record go back, then the LO reads back. */
     end_session(false, 3, true);

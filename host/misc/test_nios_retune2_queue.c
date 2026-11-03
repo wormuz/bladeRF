@@ -235,6 +235,8 @@ static fastlock_profile simulated_rffe_rx[NUM_RFFE_FASTLOCK_PROFILES];
 static fastlock_profile simulated_rffe_tx[NUM_RFFE_FASTLOCK_PROFILES];
 static bool simulated_rffe_rx_valid[NUM_RFFE_FASTLOCK_PROFILES];
 static bool simulated_rffe_tx_valid[NUM_RFFE_FASTLOCK_PROFILES];
+/* Fast Lock Setup slot per module ([0] RX, [1] TX), 0xFF fastlock off. */
+static uint8_t simulated_setup_slot[2] = { 0xFF, 0xFF };
 
 bool adi_fastlock_load(bladerf_module module, fastlock_profile *profile)
 {
@@ -439,6 +441,8 @@ bool adi_fastlock_recall(bladerf_module module, fastlock_profile *profile,
     recalled_profile_num = profile->profile_num;
     recalled_port = profile->port;
     recalled_spdt = profile->spdt;
+    simulated_setup_slot[module == BLADERF_MODULE_TX ? 1 : 0] =
+        profile->profile_num;
     if (failure_stage != NULL) {
         *failure_stage = fail_profile_recall
             ? NIOS_PKT_RETUNE2_FAILURE_PLL_STATUS_READ
@@ -482,6 +486,17 @@ bool adi_fastlock_recall_start(bladerf_module module,
     simulated_fastlock_owner = module;
     simulated_fastlock_pending_polls = 2;
     simulated_fastlock_active = true;
+    simulated_setup_slot[module == BLADERF_MODULE_TX ? 1 : 0] =
+        profile->profile_num;
+    return true;
+}
+
+bool adi_fastlock_selected_read(bladerf_module module, uint8_t *slot)
+{
+    if (slot == NULL) {
+        return false;
+    }
+    *slot = simulated_setup_slot[module == BLADERF_MODULE_TX ? 1 : 0];
     return true;
 }
 
@@ -2578,29 +2593,48 @@ static int check_preload_preserves_scheduled_profile_slot(void)
         return 1;
     }
 
-    if (!run_until_queue_head_state(&rx_queue, ENTRY_STATE_SCHEDULED, 24) ||
-        load_count != loads_after_first_arm + 18 ||
-        simulated_rffe_rx[first.profile_num].profile_data[0] != 0x5a) {
-        fputs("deferred colliding profile did not load at queue head\n",
+    /* `first` executed and its dwell runs from slot 3 until `later`'s
+     * timestamp. Uploading `later` (other bytes, same slot) at the queue
+     * head would retune that dwell early, so the head refuses it. */
+    for (unsigned turn = 0; turn < 24 && rx_queue.count > 0; turn++) {
+        pkt_retune2_work();
+    }
+    if (rx_queue.count != 0 || load_count != loads_after_first_arm ||
+        pkt_retune2_failure_count(BLADERF_MODULE_RX) != 1 ||
+        simulated_rffe_rx[first.profile_num].profile_data[0] != 0xa5) {
+        fputs("head upload rewrote the selected RFFE profile of the dwell\n",
               stderr);
         track_rffe_fastlock_slots = false;
         return 1;
     }
 
-    /* `later` executes and leaves the queue, but its RFFE slot stays the
-     * selected profile that drives the LO of its dwell. A queued entry with
-     * the same RFFE slot must not be preloaded behind an armed head. */
+    /* An ordinary LO setter left fastlock mode: the chip no longer runs
+     * from slot 3, the stale reservation is dropped, the same request
+     * loads and executes. */
+    simulated_setup_slot[0] = 0xFF;
+    if (enqueue_retune_with_identity(&rx_queue, &later, 2, 300, 0, 0) != 1 ||
+        !run_until_queue_head_state(&rx_queue, ENTRY_STATE_SCHEDULED, 24) ||
+        simulated_rffe_rx[later.profile_num].profile_data[0] != 0x5a ||
+        rffe_selected[0] != 0xFF) {
+        fputs("slot left by fastlock exit was not released\n", stderr);
+        track_rffe_fastlock_slots = false;
+        return 1;
+    }
     compare_fired_rx = true;
     for (unsigned turn = 0; turn < 8 && rx_queue.count > 0; turn++) {
         pkt_retune2_work();
     }
     compare_fired_rx = false;
+
+    /* `later` executes and leaves the queue, but its RFFE slot stays the
+     * selected profile that drives the LO of its dwell. A queued entry with
+     * the same RFFE slot must not be preloaded behind an armed head. */
     first.profile_num = 4;
     first.profile_data[0] = 0x44;
     later.profile_data[0] = 0x77;
-    if (rx_queue.count != 0 ||
-        enqueue_retune_with_identity(&rx_queue, &first, 4, 300, 0, 0) != 1 ||
-        enqueue_retune_with_identity(&rx_queue, &later, 5, 400, 0, 0) != 2 ||
+    if (rx_queue.count != 0 || rffe_selected[0] != later.profile_num ||
+        enqueue_retune_with_identity(&rx_queue, &first, 4, 400, 0, 0) != 1 ||
+        enqueue_retune_with_identity(&rx_queue, &later, 5, 500, 0, 0) != 2 ||
         !run_until_queue_head_state(&rx_queue, ENTRY_STATE_SCHEDULED, 24)) {
         fputs("selected-slot scenario did not arm its head\n", stderr);
         track_rffe_fastlock_slots = false;
@@ -2614,6 +2648,54 @@ static int check_preload_preserves_scheduled_profile_slot(void)
               stderr);
         track_rffe_fastlock_slots = false;
         return 1;
+    }
+
+    /* RX and TX fastlock banks are separate AD9361 registers (0x25x vs
+     * 0x29x): the RX selection must not reserve the TX slot. */
+    {
+        fastlock_profile tx_profile = later;
+        tx_profile.state = FASTLOCK_STATE_BBP;
+        if (rffe_selected[1] == later.profile_num ||
+            profile_upload_hits_selected(BLADERF_MODULE_TX, &tx_profile)) {
+            fputs("RX selected slot reserved the TX fastlock bank\n", stderr);
+            track_rffe_fastlock_slots = false;
+            return 1;
+        }
+    }
+
+    /* The setup write switches the synthesizer before its lock is seen.
+     * The slot is reserved from that write, and stays reserved when the
+     * lock observation fails. */
+    {
+        fastlock_profile recalled = { 0 };
+        uint8_t stage = NIOS_PKT_RETUNE2_FAILURE_NONE;
+        bool pll_pending = false;
+        bool ok;
+
+        pkt_retune2_init();
+        recalled.profile_num = 6;
+        recalled.state = FASTLOCK_STATE_BBP_RFFE;
+        fail_profile_recall = true;
+        ok = profile_activate(BLADERF_MODULE_RX, &recalled, NULL, &stage,
+                              true, false, &pll_pending, NULL, NULL);
+        if (!ok || !pll_pending || rffe_selected[0] != 6) {
+            fail_profile_recall = false;
+            fputs("recall start did not reserve its RFFE slot\n", stderr);
+            track_rffe_fastlock_slots = false;
+            return 1;
+        }
+        for (unsigned turn = 0; turn < 8 && pll_pending; turn++) {
+            ok = profile_activate(BLADERF_MODULE_RX, &recalled, NULL, &stage,
+                                  true, true, &pll_pending, NULL, NULL);
+        }
+        fail_profile_recall = false;
+        if (ok || pll_pending || rffe_selected[0] != 6) {
+            fputs("failed lock released the switched RFFE slot\n", stderr);
+            track_rffe_fastlock_slots = false;
+            return 1;
+        }
+        pkt_retune2_init();
+        simulated_setup_slot[0] = 0xFF;
     }
 
     track_rffe_fastlock_slots = false;

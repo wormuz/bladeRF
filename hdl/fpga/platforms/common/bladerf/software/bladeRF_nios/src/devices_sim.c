@@ -796,6 +796,17 @@ void adi_rfpll_synth_read(bladerf_module m, uint8_t rffe_profile,
     memset(synth, 0, NIOS_PKT_RETUNE2_SYNTH_LEN);
 }
 
+/* No synthesizer runs from a profile bank here. */
+bool adi_fastlock_selected_read(bladerf_module m, uint8_t *slot)
+{
+    (void)m;
+    if (slot == NULL) {
+        return false;
+    }
+    *slot = 0xFF;
+    return true;
+}
+
 bool adi_rfport_select(fastlock_profile *p)
 {
     return p != NULL;

@@ -1906,6 +1906,30 @@ int32_t adi_fastlock_recall_poll(bladerf_module m, uint8_t *failure_stage)
     return 1;
 }
 
+/* adi_fastlock_recall_start() writes (slot << 5) | 1 to Fast Lock Setup and
+ * ad9361_fastlock_exit_foreign() writes 0: bit 0 is fastlock mode, [7:5] the
+ * slot whose RAM drives the synthesizer. */
+bool adi_fastlock_selected_read(bladerf_module m, uint8_t *slot)
+{
+    const uint16_t setup_reg = BLADERF_CHANNEL_IS_TX(m) ? 0x29a : 0x25a;
+    uint64_t value;
+    uint8_t setup;
+
+    if (slot == NULL) {
+        return false;
+    }
+    *slot = 0xFF;
+    if (!adi_spi_read_checked((0x0 << 15) | (0x0 << 12) | (setup_reg & 0x3ff),
+                              &value)) {
+        return false;
+    }
+    setup = (uint8_t)(value >> 56);
+    if ((setup & 0x1) != 0) {
+        *slot = (setup >> 5) & 0x7;
+    }
+    return true;
+}
+
 bool adi_rfpll_lock_read(bladerf_module m, bool *locked)
 {
     const uint16_t lock_reg = BLADERF_CHANNEL_IS_TX(m)
