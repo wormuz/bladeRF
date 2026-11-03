@@ -172,6 +172,11 @@ static struct queue {
     struct queue_entry entries[RETUNE2_QUEUE_MAX];
 } rx_queue, tx_queue;
 static bool profile_preload_tx_first;
+/* RFFE slot of the last recall per module ([0] RX, [1] TX), 0xFF none. The
+ * AD9361 synthesizer runs from the selected profile's RAM, so writing that
+ * slot retunes the LO of the dwell in progress. Its entry is dequeued once
+ * executed; the background preloader must still keep off this slot. */
+static uint8_t rffe_selected[2] = { 0xFF, 0xFF };
 static struct retune2_now_timing rx_retune2_now_timing;
 static struct retune2_now_timing tx_retune2_now_timing;
 
@@ -1234,6 +1239,8 @@ static inline bool profile_activate(bladerf_module module, fastlock_profile *p,
     }
 #endif
 
+    rffe_selected[module == BLADERF_MODULE_TX ? 1 : 0] = p->profile_num;
+
     /* Adjust the RFFE port */
     if (!adi_rfport_select(p)) {
         if (failure_stage != NULL) {
@@ -2049,6 +2056,10 @@ static bool profile_preload_next(struct queue *q, bladerf_module module)
         return false;
     }
 
+    i = rffe_selected[module == BLADERF_MODULE_TX ? 1 : 0];
+    if (i < NUM_RFFE_FASTLOCK_PROFILES) {
+        used |= (uint8_t)(1u << i);
+    }
     for (i = 0; i < q->count; i++) {
         entry = peek_next_retune_offset(q, i);
         if (profile_slot_compare_owned(entry) ||

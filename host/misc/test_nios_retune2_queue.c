@@ -2587,6 +2587,35 @@ static int check_preload_preserves_scheduled_profile_slot(void)
         return 1;
     }
 
+    /* `later` executes and leaves the queue, but its RFFE slot stays the
+     * selected profile that drives the LO of its dwell. A queued entry with
+     * the same RFFE slot must not be preloaded behind an armed head. */
+    compare_fired_rx = true;
+    for (unsigned turn = 0; turn < 8 && rx_queue.count > 0; turn++) {
+        pkt_retune2_work();
+    }
+    compare_fired_rx = false;
+    first.profile_num = 4;
+    first.profile_data[0] = 0x44;
+    later.profile_data[0] = 0x77;
+    if (rx_queue.count != 0 ||
+        enqueue_retune_with_identity(&rx_queue, &first, 4, 300, 0, 0) != 1 ||
+        enqueue_retune_with_identity(&rx_queue, &later, 5, 400, 0, 0) != 2 ||
+        !run_until_queue_head_state(&rx_queue, ENTRY_STATE_SCHEDULED, 24)) {
+        fputs("selected-slot scenario did not arm its head\n", stderr);
+        track_rffe_fastlock_slots = false;
+        return 1;
+    }
+    for (unsigned turn = 0; turn < 24; turn++) {
+        pkt_retune2_work();
+    }
+    if (simulated_rffe_rx[later.profile_num].profile_data[0] != 0x5a) {
+        fputs("preload overwrote the selected RFFE profile of the dwell\n",
+              stderr);
+        track_rffe_fastlock_slots = false;
+        return 1;
+    }
+
     track_rffe_fastlock_slots = false;
     return 0;
 }
