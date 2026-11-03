@@ -926,6 +926,42 @@ static int check_tokened_now_uses_terminal_completion(void)
         return 1;
     }
 
+    /* NOW into the slot the synthesizer already runs from (NIOS-PATHS-001):
+     * the live RAM is rewritten only after acceptance, one write per worker
+     * turn, while the entry is PROFILE_LOAD_PENDING and no success is
+     * published, so every LO move is inside the pending window the host
+     * already treats as unspecified. The tracker keeps naming that slot. */
+    if (rffe_selected[0] != 1) {
+        fputs("recall did not reserve its RFFE slot\n", stderr);
+        return 1;
+    }
+    fastlocks_rx[0].profile_num = 1;
+    fastlocks_rx[0].state = FASTLOCK_STATE_BBP;
+    staged_profile_write_count = 0;
+    nios_pkt_retune2_pack_token(
+        request.req, BLADERF_MODULE_RX, NIOS_PKT_RETUNE2_NOW, 0, 1,
+        0x83, 0x00, (uint16_t)(token + 1));
+    pkt_retune2(&request);
+    if ((request.resp[NIOS_PKT_RETUNE2_RESP_IDX_FLAGS] &
+         NIOS_PKT_RETUNE2_RESP_FLAG_ASYNC_PENDING) == 0 ||
+        rx_queue.entries[rx_queue.rem_idx].state !=
+            ENTRY_STATE_PROFILE_LOAD_PENDING ||
+        staged_profile_write_count != 0 || rffe_selected[0] != 1 ||
+        pkt_retune2_success_count(BLADERF_MODULE_RX) != 1) {
+        fputs("same-slot NOW was not accepted into its pending window\n",
+              stderr);
+        return 1;
+    }
+    if (!drain_staged_profile_upload(BLADERF_MODULE_RX) ||
+        pkt_retune2_success_count(BLADERF_MODULE_RX) != 1 ||
+        rffe_selected[0] != 1 ||
+        !run_until_queue_empty(&rx_queue, 8) ||
+        pkt_retune2_success_count(BLADERF_MODULE_RX) != 2 ||
+        pkt_retune2_failure_count(BLADERF_MODULE_RX) != 0) {
+        fputs("same-slot NOW did not complete after its writes\n", stderr);
+        return 1;
+    }
+
     /* The acceptance ACK packs an atomic ring boundary into its unused
      * duration bytes while preserving the 16-byte wire packet. */
     pkt_retune2_init();
